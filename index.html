@@ -258,8 +258,7 @@
 // 🚀 THE MAGIC: API FETCH (ใช้คุยกับ Google Apps Script)
 // =========================================================
 // ⚠️ เปลี่ยน URL ด้านล่างเป็นลิงก์ Web App ของคุณที่ได้จากการ Deploy
-const API_URL = "https://script.google.com/macros/s/AKfycbzbeXFbqCNYA6F0GRiLXfK9WMizCXBZdrrdUQae10p_U-h018VQc6UbnhWS2yDBvHl-Aw/exec"; 
-
+const API_URL = "https://script.google.com/macros/s/AKfycbzbeXFbqCNYA6F0GRiLXfK9WMizCXBZdrrdUQae10p_U-h018VQc6UbnhWS2yDBvHl-Aw/exec";
 function callAPI(action, params = {}) {
   return fetch(API_URL, {
     method: 'POST',
@@ -311,8 +310,15 @@ async function openLiveCamera() {
   resultArea.innerHTML = "จัดข้อความ ID ให้อยู่ในกรอบแดง แล้วกดปุ่มถ่ายภาพ";
   
   try {
-    // 📸 เปิดกล้องหลังสตรีมสด
-    localStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    // 📸 เปิดกล้องหลังสตรีมสด + บังคับความละเอียดสูงระดับ HD และขอใช้งาน Continuous Auto-Focus
+    localStream = await navigator.mediaDevices.getUserMedia({ 
+      video: { 
+        facingMode: "environment",
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        advanced: [{ focusMode: "continuous" }]
+      } 
+    });
     video.srcObject = localStream;
   } catch (err) {
     closeLiveCamera();
@@ -330,7 +336,6 @@ function captureAndScan() {
   const targetBox = document.getElementById('targetBox');
   const resultArea = document.getElementById('scanResultArea');
   if (!localStream || video.videoWidth === 0) return;
-
   resultArea.innerHTML = "⏳ <span class='text-blue-600 animate-pulse'>AI กำลังอ่านข้อความ...</span>";
   
   const videoRect = video.getBoundingClientRect();
@@ -339,10 +344,30 @@ function captureAndScan() {
   const scaleY = video.videoHeight / videoRect.height;
   
   const canvas = document.createElement('canvas');
-  canvas.width = boxRect.width * scaleX; canvas.height = boxRect.height * scaleY;
-  canvas.getContext('2d').drawImage(video, (boxRect.left - videoRect.left) * scaleX, (boxRect.top - videoRect.top) * scaleY, boxRect.width * scaleX, boxRect.height * scaleY, 0, 0, canvas.width, canvas.height);
+  canvas.width = boxRect.width * scaleX; 
+  canvas.height = boxRect.height * scaleY;
+  
+  const ctx = canvas.getContext('2d');
+  // วาดภาพที่ได้จากกรอบเล็งเป้าหมายแดงลงในแคนวาสตามสัดส่วนภาพจริง
+  ctx.drawImage(video, (boxRect.left - videoRect.left) * scaleX, (boxRect.top - videoRect.top) * scaleY, boxRect.width * scaleX, boxRect.height * scaleY, 0, 0, canvas.width, canvas.height);
+  
+  // 🛠️ จุดแก้ไขที่ 1: ทำ Image Pre-processing ปรับภาพขาวดำ (Grayscale) และเร่ง Contrast (Threshold) เพื่อตัดสัญญาณรบกวนและปัญหาภาพมัว/เบลอ
+  let imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  let data = imageData.data;
+  for (let i = 0; i < data.length; i += 4) {
+    let avg = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114);
+    let threshold = avg > 120 ? 255 : 0; 
+    data[i]     = threshold; // Red
+    data[i + 1] = threshold; // Green
+    data[i + 2] = threshold; // Blue
+  }
+  ctx.putImageData(imageData, 0, 0);
 
-  Tesseract.recognize(canvas, 'eng')
+  // 🛠️ จุดแก้ไขที่ 2: ตั้งค่าจำกัดพารามิเตอร์ให้ Tesseract ทำงานร่วมกับข้อมูลภาพขาวดำ ค้นหาเฉพาะอักษรพิมพ์ใหญ่ ตัวเลข และขีดกลางแบบบรรทัดเดียว (PSM 7)
+  Tesseract.recognize(canvas, 'eng', {
+    tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-',
+    tessedit_pageseg_mode: '7'
+  })
   .then(({ data: { text } }) => {
     let rawText = text.trim();
     resultArea.innerHTML = `AI อ่านได้: <span class='text-blue-700 font-mono'>${rawText || "-ไม่พบ-"}</span>`;
@@ -364,7 +389,7 @@ function captureAndScan() {
         let fallbackWord = rawText.replace(/[^a-zA-Z0-9\-]/g, ' ').replace(/\s+/g, ' ').trim().split(' ').find(w => w.includes('-') && w.length >= 6);
         if (fallbackWord) {
             setTimeout(() => { 
-                document.getElementById('search').value = fallbackWord.toUpperCase().replace(/O/g, '0'); 
+                document.getElementById('search').value = fallbackWord.toUpperCase().replace(/O/g, '0');
                 closeLiveCamera(); 
                 currentPage = 1; 
                 loadData(); 
@@ -460,15 +485,16 @@ function update(id, type) {
   const qty = parseInt(document.getElementById("qty_" + id).value);
   if (!qty || qty <= 0) return showInfoModal("แจ้งเตือน", "กรุณาระบุจำนวนที่มากกว่า 0", "⚠️");
   pendingUpdate = { id, type, qty };
-  
   if (type === "OUT") {
     if (userRole === 0) { document.getElementById("guest_name_input").value = ""; document.getElementById("div_guest_name").style.display = "block"; } 
     else { document.getElementById("guest_name_input").value = currentUserName; document.getElementById("div_guest_name").style.display = "none"; }
-    document.getElementById("div_trans_line").style.display = "block"; document.getElementById("trans_line_input").value = "";
+    document.getElementById("div_trans_line").style.display = "block";
+    document.getElementById("trans_line_input").value = "";
     document.getElementById("guestModal").classList.remove("hidden");
   } else {
     if (userRole === 0) {
-      document.getElementById("guest_name_input").value = ""; document.getElementById("div_guest_name").style.display = "block";
+      document.getElementById("guest_name_input").value = "";
+      document.getElementById("div_guest_name").style.display = "block";
       document.getElementById("div_trans_line").style.display = "none"; document.getElementById("trans_line_input").value = "-";
       document.getElementById("guestModal").classList.remove("hidden");
     } else {
@@ -493,7 +519,6 @@ async function executeAction(id, type, qty, userName, line = "-") {
   const isConfirmed = await niceConfirm(`ยืนยันการทำรายการ`, `ต้องการทำรายการจำนวน ${qty} ชิ้น?`, "❓");
   if (!isConfirmed) return;
   const qtyInput = document.getElementById("qty_" + id); if(qtyInput) qtyInput.disabled = true;
-
   callAPI("updateStock", { id: id, qty: qty, type: type, user: userName, line: line }).then(res => {
     if(qtyInput) { qtyInput.disabled = false; qtyInput.value = ""; }
     if (res.status === "success") { 
@@ -510,7 +535,6 @@ async function quickAdjust(id) {
   if (newQty === "" || Number(newQty) < 0) return showInfoModal("เตือน", "ระบุจำนวนสต็อกจริง", "⚠️");
   const isConfirmed = await niceConfirm("ยืนยัน", `ปรับสต็อกรหัส ${id} เป็น ${newQty}?`, "🔧");
   if (!isConfirmed) return;
-  
   callAPI("adjustStock", { id: id, newQty: newQty, adminName: currentUserName }).then(res => {
     document.getElementById("qty_" + id).value = "";
     if(res.status === "success") {
@@ -546,7 +570,8 @@ function saveEdit() {
 
 async function requestDelete() {
   const id = document.getElementById("edit_original_id").value;
-  const confirm1 = await niceConfirm("ลบ", `ลบอะไหล่ ID: ${id} ?`, "🗑️"); if (!confirm1) return;
+  const confirm1 = await niceConfirm("ลบ", `ลบอะไหล่ ID: ${id} ?`, "🗑️");
+  if (!confirm1) return;
   callAPI("deleteItem", { id: id, adminName: currentUserName }).then(res => {
     if (res.status === "success") { closeModal(); showInfoModal("สำเร็จ", "ลบข้อมูลแล้ว", "✅"); loadData(); } 
     else showInfoModal("ผิดพลาด", res.message, "❌");
@@ -556,7 +581,6 @@ async function requestDelete() {
 function saveNewItem() {
   const fileInput = document.getElementById("add_file");
   const data = { id: document.getElementById("add_id").value, part: document.getElementById("add_part").value, model: document.getElementById("add_model").value, machine: document.getElementById("add_machine").value, category: document.getElementById("add_category").value, price: document.getElementById("add_price").value, detail: document.getElementById("add_detail").value, quantity: document.getElementById("add_quantity").value };
-  
   if (fileInput.files.length > 0) {
     const reader = new FileReader();
     reader.onload = function(e) {
@@ -576,7 +600,6 @@ function fetchDashboardData() {
   document.getElementById("dashboardAnalysis").innerHTML = "";
   const startDate = document.getElementById("dashStartDate").value;
   const endDate = document.getElementById("dashEndDate").value;
-
   callAPI("getDashboardData", { startDateStr: startDate, endDateStr: endDate, typeFilter: currentDashType }).then(res => {
     document.getElementById("dashboardLoading").classList.add("hidden");
     if(res.status === "success") { document.getElementById("usageChart").classList.remove("hidden"); renderChart(res.data, res.type); }
@@ -593,8 +616,10 @@ function renderChart(data, type) {
   const qtyData = topData.map(d => d.qty);
   const totalCount = countData.reduce((sum, val) => sum + val, 0);
 
-  let pieColors = (type === 'OUT') ? ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#6366f1', '#ec4899', '#8b5cf6', '#14b8a6', '#f97316', '#06b6d4'] : (type === 'IN') ? ['#10b981', '#059669', '#34d399', '#6ee7b7', '#047857', '#a7f3d0'] : ['#f59e0b', '#d97706', '#fbbf24', '#fcd34d', '#b45309', '#fde68a'];
-
+  let pieColors = (type === 'OUT') ?
+  ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#6366f1', '#ec4899', '#8b5cf6', '#14b8a6', '#f97316', '#06b6d4'] : (type === 'IN') ?
+  ['#10b981', '#059669', '#34d399', '#6ee7b7', '#047857', '#a7f3d0'] : ['#f59e0b', '#d97706', '#fbbf24', '#fcd34d', '#b45309', '#fde68a'];
+  
   usageChartInstance = new Chart(ctx, {
     type: 'pie',
     data: { labels: labels, datasets: [{ data: countData, backgroundColor: pieColors, borderWidth: 2, borderColor: '#ffffff' }] },
@@ -607,7 +632,6 @@ function renderChart(data, type) {
       }
     }
   });
-
   if(totalCount > 0) {
       document.getElementById('dashboardAnalysis').innerHTML = `<div class="bg-blue-50 border p-4 rounded-xl text-sm mt-5 shadow-sm"><b>ข้อมูลสูงสุด:</b> <span class="bg-blue-200 px-1 rounded">${labels[0]}</span> ทำรายการไป ${countData[0]} ครั้ง (รวม ${qtyData[0]} ชิ้น)</div>`;
   }
@@ -658,7 +682,7 @@ function updateUserRole(username) {
 
 // UI Controls 
 function setDashType(type) { 
-  currentDashType = type; 
+  currentDashType = type;
   ['btnDash_OUT', 'btnDash_IN', 'btnDash_ADJUST'].forEach(id => document.getElementById(id).className = "flex-1 py-2 px-4 rounded-lg text-sm font-bold bg-transparent text-gray-500 border border-gray-200");
   document.getElementById('btnDash_'+type).className = `flex-1 py-2 px-4 rounded-lg text-sm font-bold shadow text-white ${type==='OUT'?'bg-blue-600':type==='IN'?'bg-emerald-600':'bg-orange-600'}`;
   fetchDashboardData(); 
